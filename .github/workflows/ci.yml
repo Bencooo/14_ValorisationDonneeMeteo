@@ -85,6 +85,7 @@ jobs:
       - name: Run frontend tests
         working-directory: frontend
         run: |
+          set -o pipefail
           mkdir -p ../reports/tests
           npm run test:ci 2>&1 | tee ../reports/tests/frontend-tests.txt
 
@@ -115,6 +116,7 @@ jobs:
           DB_USER: infoclimat
           DB_PASSWORD: infoclimat2026
         run: |
+          set -o pipefail
           mkdir -p ../reports/tests
           uv run pytest 2>&1 | tee ../reports/tests/backend-tests.txt
 
