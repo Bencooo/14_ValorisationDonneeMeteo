@@ -1,0 +1,257 @@
+name: Basic CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository_owner }}/meteo-backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository_owner }}/meteo-frontend
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  install-dependencies:
+    name: Install dependencies
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.17"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --extra dev --locked
+
+  run-tests:
+    name: Run tests
+    runs-on: ubuntu-24.04
+    needs: install-dependencies
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: meteodb
+          POSTGRES_USER: infoclimat
+          POSTGRES_PASSWORD: infoclimat2026
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U infoclimat -d meteodb"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: |
+          mkdir -p ../reports/tests
+          npm run test:ci 2>&1 | tee ../reports/tests/frontend-tests.txt
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.17"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --extra dev --locked
+
+      - name: Prepare backend environment
+        working-directory: backend
+        run: cp .env.example .env
+
+      - name: Run backend tests
+        working-directory: backend
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_NAME: meteodb
+          DB_USER: infoclimat
+          DB_PASSWORD: infoclimat2026
+        run: |
+          mkdir -p ../reports/tests
+          uv run pytest 2>&1 | tee ../reports/tests/backend-tests.txt
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: reports/tests/
+
+  run-linter:
+    name: Run linter
+    runs-on: ubuntu-24.04
+    needs: install-dependencies
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.17"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --extra dev --locked
+
+      - name: Lint backend
+        working-directory: backend
+        run: uv run ruff check .
+
+  run-security-scan:
+    name: Run security scan
+    runs-on: ubuntu-24.04
+    needs: install-dependencies
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Run npm audit
+        run: |
+          mkdir -p reports/security
+          cd frontend
+          npm audit --json > ../reports/security/npm-audit.json || true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.17"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --extra dev --locked
+
+      - name: Run pip-audit
+        run: |
+          python -m pip install pip-audit
+          cd backend
+          pip-audit -r <(uv export --format requirements-txt) -f json > ../reports/security/pip-audit.json || true
+
+      - name: Upload security scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-code-report
+          path: reports/security/
+
+  build-docker-image:
+    name: Build Docker image
+    runs-on: ubuntu-24.04
+    needs: [run-tests, run-linter, run-security-scan]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t "${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" backend
+
+      - name: Build frontend image
+        run: docker build -t "${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" frontend
+
+  push-to-registry:
+    name: Push to registry (main only)
+    runs-on: ubuntu-24.04
+    needs: build-docker-image
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        run: |
+          docker build -t "${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" backend
+          docker push "${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+
+      - name: Build and push frontend image
+        run: |
+          docker build -t "${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" frontend
+          docker push "${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
