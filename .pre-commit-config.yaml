@@ -13,7 +13,9 @@ repos:
     hooks:
       - id: frontend-pre-commit
         name: Run frontend pre-commit hooks
-        entry: bash -c 'cd frontend && npm run check'
+        # Pas de lint:fix/format --write ici : en CI ça modifie le working tree et fait échouer pre-commit.
+        # En local : npm run check (fix + format) avant de committer.
+        entry: bash -c 'cd frontend && npm run format:check && npm run lint && npm run test:unit'
         language: system
         pass_filenames: false
         always_run: true
