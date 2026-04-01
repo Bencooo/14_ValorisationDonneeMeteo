@@ -1,12 +1,15 @@
-FROM node:24-alpine AS build
+# Build sur Debian : évite les échecs fréquents des binaires natifs (oxc, sharp, etc.) avec Alpine.
+FROM node:24-bookworm-slim AS build
 
 WORKDIR /app
 
-COPY package*.json .
+ENV NPM_CONFIG_LEGACY_PEER_DEPS=true \
+    NODE_OPTIONS="--max-old-space-size=6144" \
+    NUXT_TELEMETRY_DISABLED=1
 
-ENV NPM_CONFIG_LEGACY_PEER_DEPS=true
+COPY package*.json ./
 
-RUN npm install
+RUN npm ci --legacy-peer-deps
 
 COPY . .
 
