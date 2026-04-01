@@ -12,8 +12,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  BACKEND_IMAGE_NAME: ${{ github.repository_owner }}/meteo-backend
-  FRONTEND_IMAGE_NAME: ${{ github.repository_owner }}/meteo-frontend
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -38,7 +36,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          version: "0.6.17"
+          version: "0.10.0"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -53,23 +51,13 @@ jobs:
     name: Run tests
     runs-on: ubuntu-24.04
     needs: install-dependencies
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: meteodb
-          POSTGRES_USER: infoclimat
-          POSTGRES_PASSWORD: infoclimat2026
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U infoclimat -d meteodb"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Start TimescaleDB (same stack as dev)
+        working-directory: backend/timescaledb-env
+        run: docker compose up -d timescaledb --wait
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -92,7 +80,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          version: "0.6.17"
+          version: "0.10.0"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -152,7 +140,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          version: "0.6.17"
+          version: "0.10.0"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -195,7 +183,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          version: "0.6.17"
+          version: "0.10.0"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -209,8 +197,10 @@ jobs:
       - name: Run pip-audit
         run: |
           python -m pip install pip-audit
+          mkdir -p reports/security
           cd backend
-          pip-audit -r <(uv export --format requirements-txt) -f json > ../reports/security/pip-audit.json || true
+          uv export --format requirements-txt > /tmp/backend-requirements.txt
+          pip-audit -r /tmp/backend-requirements.txt -f json > ../reports/security/pip-audit.json || true
 
       - name: Upload security scan report
         uses: actions/upload-artifact@v4
@@ -226,11 +216,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Image owner (GHCR exige des noms en minuscules)
+        run: |
+          echo "IMAGE_OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Build backend image
-        run: docker build -t "${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" backend
+        run: docker build -t "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LOWER }}/meteo-backend:${{ env.IMAGE_TAG }}" backend
 
       - name: Build frontend image
-        run: docker build -t "${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" frontend
+        run: docker build -t "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LOWER }}/meteo-frontend:${{ env.IMAGE_TAG }}" frontend
 
   push-to-registry:
     name: Push to registry (main only)
@@ -241,6 +235,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Image owner (GHCR exige des noms en minuscules)
+        run: |
+          echo "IMAGE_OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -250,10 +248,10 @@ jobs:
 
       - name: Build and push backend image
         run: |
-          docker build -t "${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" backend
-          docker push "${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          docker build -t "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LOWER }}/meteo-backend:${{ env.IMAGE_TAG }}" backend
+          docker push "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LOWER }}/meteo-backend:${{ env.IMAGE_TAG }}"
 
       - name: Build and push frontend image
         run: |
-          docker build -t "${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}" frontend
-          docker push "${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          docker build -t "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LOWER }}/meteo-frontend:${{ env.IMAGE_TAG }}" frontend
+          docker push "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER_LOWER }}/meteo-frontend:${{ env.IMAGE_TAG }}"
